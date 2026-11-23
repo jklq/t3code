@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing fork tag to (re)build, for example v0.1.12-nightly.20261123.515100"
+        description: "Existing fork tag to (re)build, for example v0.1.12-nightly.20261123.5151"
         required: true
         type: string
 
@@ -48,22 +48,56 @@ jobs:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          # Fork versions append a two-digit fork revision to the upstream nightly number.
-          if [[ ! "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.)([0-9]+)([0-9]{2})$ ]]; then
-            echo "::error::$TAG is not a fork nightly tag (v<x.y.z>-nightly.<date>.<upstream run><2-digit fork revision>)."
+          # A fork build carries the exact version of the upstream nightly it is built on, so official
+          # clients and upstream servers treat it as that nightly.
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+$ ]]; then
+            echo "::error::$TAG is not an upstream nightly tag."
             exit 1
           fi
           env_example() { sed -n "s|^T3CODE_$1=||p" .env.example; }
           {
             echo "tag=$TAG"
             echo "version=${TAG#v}"
-            echo "base_tag=v${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+            echo "base_tag=$TAG"
             echo "ref=$(git rev-parse HEAD)"
             echo "clerk_publishable_key=$(env_example CLERK_PUBLISHABLE_KEY)"
             echo "clerk_jwt_template=$(env_example CLERK_JWT_TEMPLATE)"
             echo "clerk_cli_oauth_client_id=$(env_example CLERK_CLI_OAUTH_CLIENT_ID)"
             echo "relay_url=$(env_example RELAY_URL)"
           } >> "$GITHUB_OUTPUT"
+
+  compatibility:
+    name: Fork compatibility
+    needs: [meta]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.meta.outputs.ref }}
+          fetch-depth: 300
+          sparse-checkout: fork
+      - name: Official clients and upstream servers must still understand this build
+        shell: bash
+        env:
+          BASE_TAG: ${{ needs.meta.outputs.base_tag }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 https://github.com/pingdotgg/t3code.git "refs/tags/$BASE_TAG"
+          # Paths that define what the official mobile app, web app, relay and upstream servers
+          # exchange with this build. A fork commit may touch them only with a `Fork-Compat:` trailer
+          # explaining why the change stays compatible. See FORK.md.
+          protected='^(packages/contracts/|apps/server/src/persistence/Migrations|apps/mobile/|infra/)'
+          bad=0
+          for sha in $(git rev-list FETCH_HEAD..HEAD); do
+            files=$(git diff-tree --no-commit-id --name-only -r "$sha" | grep -E "$protected" || true)
+            if [[ -n "$files" ]] && ! git log -1 --format=%B "$sha" | grep -q '^Fork-Compat:'; then
+              echo "::error::$(git log -1 --format='%h %s' "$sha") touches protocol paths without a Fork-Compat trailer:"
+              echo "$files"
+              bad=1
+            fi
+          done
+          exit $bad
 
   quality:
     name: Typecheck and fork tests
@@ -83,13 +117,45 @@ jobs:
       - run: vp run --filter @t3tools/desktop ensure:electron
       - name: Typecheck
         run: vp run typecheck
-      - name: Run tests the fork touches
+      - name: Find tests the fork touches
+        id: fork_tests
         shell: bash
         env:
           BASE_TAG: ${{ needs.meta.outputs.base_tag }}
         run: |
           set -euo pipefail
           git fetch --no-tags --depth=1 https://github.com/pingdotgg/t3code.git "refs/tags/$BASE_TAG"
+          mapfile -t tests < <(git diff --name-only --diff-filter=AM FETCH_HEAD HEAD -- '*.test.ts' '*.test.tsx' 2>/dev/null || true)
+          has_browser=false
+          for t in "${tests[@]}"; do
+            if [[ "$t" == *.browser.test.* ]]; then has_browser=true; fi
+          done
+          echo "has_browser=$has_browser" >> "$GITHUB_OUTPUT"
+          if [[ "$has_browser" == "true" ]]; then
+            echo "playwright_version=$(node -p "require('./apps/web/node_modules/playwright/package.json').version")" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Cache Chromium
+        id: chromium_cache
+        if: steps.fork_tests.outputs.has_browser == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-shell-${{ runner.os }}-${{ runner.arch }}-${{ steps.fork_tests.outputs.playwright_version }}
+      - name: Install Chromium for browser tests
+        if: steps.fork_tests.outputs.has_browser == 'true' && steps.chromium_cache.outputs.cache-hit != 'true'
+        run: node apps/web/node_modules/playwright/cli.js install --only-shell chromium
+      - name: Install missing Chromium system dependencies
+        if: steps.fork_tests.outputs.has_browser == 'true'
+        run: |
+          browser=$(find "$HOME/.cache/ms-playwright" -name chrome-headless-shell -type f -print -quit)
+          test -n "$browser"
+          if ldd "$browser" | grep '=> not found'; then
+            node apps/web/node_modules/playwright/cli.js install-deps chromium
+          fi
+      - name: Run tests the fork touches
+        shell: bash
+        run: |
+          set -euo pipefail
           mapfile -t tests < <(git diff --name-only --diff-filter=AM FETCH_HEAD HEAD -- '*.test.ts' '*.test.tsx' 2>/dev/null || true)
           if [[ ${#tests[@]} -eq 0 ]]; then
             echo "The fork touches no test files."
@@ -185,7 +251,7 @@ jobs:
 
   release:
     name: Publish prerelease
-    needs: [meta, quality, desktop]
+    needs: [meta, compatibility, quality, desktop]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
