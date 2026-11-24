@@ -142,6 +142,221 @@ describe("fork/pool", () => {
     expect(claudePick.selected?.instanceId).toBe(albert.instanceId);
   });
 
+  it("balances 5-hour and weekly pace across staggered reset clocks while protecting single-thread runway", () => {
+    const HOUR = 60 * 60_000;
+    const DAY = 24 * HOUR;
+    const makeTimedMember = (
+      id: string,
+      session: { used: number; resetsInMs?: number },
+      weekly: { used: number; resetsInMs?: number },
+    ) =>
+      makeAntigravityMember(id, {
+        windows: [
+          {
+            id: "gemini-5h",
+            label: "Gemini · 5-hour",
+            kind: "session",
+            usedPercent: session.used,
+            windowDurationMins: 300,
+            ...(session.resetsInMs !== undefined
+              ? { resetsAt: iso(NOW + session.resetsInMs) }
+              : {}),
+          },
+          {
+            id: "gemini-weekly",
+            label: "Gemini · Weekly",
+            kind: "weekly",
+            usedPercent: weekly.used,
+            windowDurationMins: 10_080,
+            ...(weekly.resetsInMs !== undefined ? { resetsAt: iso(NOW + weekly.resetsInMs) } : {}),
+          },
+        ],
+      });
+
+    // 1. Expiring weekly quota beats a fresher account with lower raw weekly%.
+    const expiringWeekly = makeTimedMember(
+      "ag_expiring",
+      { used: 10, resetsInMs: 4.5 * HOUR },
+      { used: 60, resetsInMs: 6 * HOUR },
+    );
+    const freshWeekly = makeTimedMember("ag_fresh", { used: 0 }, { used: 30, resetsInMs: 6 * DAY });
+    const untouched = makeTimedMember("ag_untouched", { used: 0 }, { used: 0 });
+    expect(
+      selectPoolMember({
+        members: [freshWeekly, untouched, expiringWeekly],
+        model: "gemini-4-neon",
+        now: NOW,
+      }).selected?.instanceId,
+    ).toBe(expiringWeekly.instanceId);
+
+    // 2. Untouched account starts its clock ahead of an account burning ahead of weekly pace.
+    expect(
+      selectPoolMember({
+        members: [freshWeekly, untouched],
+        model: "gemini-4-neon",
+        now: NOW,
+      }).selected?.instanceId,
+    ).toBe(untouched.instanceId);
+
+    // 3. High 5h resetting soon + low weekly beats fresh 5h + high weekly.
+    const high5hResettingSoon = makeTimedMember(
+      "ag_5h_soon",
+      { used: 70, resetsInMs: 20 * 60_000 },
+      { used: 20, resetsInMs: 5 * DAY },
+    );
+    const heavyWeekly = makeTimedMember(
+      "ag_heavy_weekly",
+      { used: 0 },
+      { used: 65, resetsInMs: 5 * DAY },
+    );
+    expect(
+      selectPoolMember({
+        members: [heavyWeekly, high5hResettingSoon],
+        model: "gemini-4-neon",
+        now: NOW,
+      }).selected?.instanceId,
+    ).toBe(high5hResettingSoon.instanceId);
+
+    // 4. High 5h with hours left does not beat a fresh 5h account over a tiny 2% weekly difference.
+    const hot5h = makeTimedMember(
+      "ag_hot_5h",
+      { used: 75, resetsInMs: 4.5 * HOUR },
+      { used: 10, resetsInMs: 6.9 * DAY },
+    );
+    const cool5h = makeTimedMember("ag_cool_5h", { used: 0 }, { used: 12, resetsInMs: 6.9 * DAY });
+    expect(
+      selectPoolMember({
+        members: [hot5h, cool5h],
+        model: "gemini-4-neon",
+        now: NOW,
+      }).selected?.instanceId,
+    ).toBe(cool5h.instanceId);
+
+    // 5. Low-runway guard: <20% 5h or <5% weekly is avoided while a comfortable account exists,
+    //    whereas 15% expiring weekly (~60% of a 5h window) is still comfortable and salvaged.
+    const low5h = makeTimedMember(
+      "ag_low_5h",
+      { used: 88, resetsInMs: 30 * 60_000 },
+      { used: 10, resetsInMs: 5 * DAY },
+    );
+    const lowWeekly = makeTimedMember("ag_low_weekly", { used: 0 }, { used: 96, resetsInMs: HOUR });
+    const comfortableWeekly = makeTimedMember(
+      "ag_salvage_weekly",
+      { used: 0 },
+      { used: 85, resetsInMs: 4 * HOUR },
+    );
+    expect(
+      selectPoolMember({
+        members: [low5h, lowWeekly, heavyWeekly],
+        model: "gemini-4-neon",
+        now: NOW,
+      }).selected?.instanceId,
+    ).toBe(heavyWeekly.instanceId);
+    expect(
+      selectPoolMember({
+        members: [freshWeekly, comfortableWeekly],
+        model: "gemini-4-neon",
+        now: NOW,
+      }).selected?.instanceId,
+    ).toBe(comfortableWeekly.instanceId);
+
+    // 6. When every account is in the low-runway tier, pick the one with the most runway.
+    //    lowWeekly has 4% weekly (~16% 5h-eq) vs low5h's 12% 5h -> lowWeekly has more runway.
+    expect(
+      selectPoolMember({
+        members: [low5h, lowWeekly],
+        model: "gemini-4-neon",
+        now: NOW,
+      }).selected?.instanceId,
+    ).toBe(lowWeekly.instanceId);
+  });
+
+  it("rolls over expired resets during scoring and isolates Argon/Carbon buckets from default Gemini", () => {
+    const rolledOver = makeAntigravityMember("ag_rolled", {
+      windows: [
+        {
+          id: "gemini-5h",
+          label: "Gemini · 5-hour",
+          kind: "session",
+          usedPercent: 100,
+          windowDurationMins: 300,
+          resetsAt: iso(NOW - 60_000),
+        },
+        {
+          id: "gemini-weekly",
+          label: "Gemini · Weekly",
+          kind: "weekly",
+          usedPercent: 10,
+          windowDurationMins: 10_080,
+          resetsAt: iso(NOW + 5 * 24 * 60 * 60_000),
+        },
+      ],
+    });
+    const busy = makeAntigravityMember("ag_busy", {
+      windows: [
+        {
+          id: "gemini-5h",
+          label: "Gemini · 5-hour",
+          kind: "session",
+          usedPercent: 40,
+          windowDurationMins: 300,
+          resetsAt: iso(NOW + 4 * 60 * 60_000),
+        },
+        {
+          id: "gemini-weekly",
+          label: "Gemini · Weekly",
+          kind: "weekly",
+          usedPercent: 20,
+          windowDurationMins: 10_080,
+          resetsAt: iso(NOW + 5 * 24 * 60 * 60_000),
+        },
+      ],
+    });
+    expect(
+      selectPoolMember({
+        members: [busy, rolledOver],
+        model: "gemini-4-neon",
+        now: NOW,
+      }).selected?.instanceId,
+    ).toBe(rolledOver.instanceId);
+
+    const argonHeavy = makeAntigravityMember("ag_argon_heavy", {
+      windows: [
+        {
+          id: "gemini-5h",
+          label: "Gemini · 5-hour",
+          kind: "session",
+          usedPercent: 5,
+          windowDurationMins: 300,
+          resetsAt: iso(NOW + 4 * 60 * 60_000),
+        },
+        {
+          id: "gemini-weekly",
+          label: "Gemini · Weekly",
+          kind: "weekly",
+          usedPercent: 5,
+          windowDurationMins: 10_080,
+          resetsAt: iso(NOW + 5 * 24 * 60 * 60_000),
+        },
+        {
+          id: "gemini-argon-wtu-weekly",
+          label: "Gemini 4 Argon · Weekly",
+          kind: "weekly",
+          usedPercent: 95,
+          windowDurationMins: 10_080,
+          resetsAt: iso(NOW + 5 * 24 * 60 * 60_000),
+        },
+      ],
+    });
+    expect(
+      selectPoolMember({
+        members: [busy, argonHeavy],
+        model: "gemini-4-neon",
+        now: NOW,
+      }).selected?.instanceId,
+    ).toBe(argonHeavy.instanceId);
+  });
+
   it("skips depleted and cooled-down accounts and picks the quickest renewal when all are depleted", () => {
     const resetIn45m = iso(NOW + 45 * 60_000);
     const resetIn2h = iso(NOW + 120 * 60_000);
