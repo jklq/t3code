@@ -14,6 +14,7 @@ import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import {
+  antigravityWindowLimitsModel,
   collectLimitPools,
   displayLimitWindows,
   elapsedShare,
@@ -90,13 +91,10 @@ function matchingAntigravityWindows(
   model: string | undefined,
 ): ReadonlyArray<ServerProviderUsageWindow> {
   const windows = provider.usageLimits?.windows ?? [];
-  const family = antigravityModelFamily(model);
-  if (family === null) return windows;
+  if (!model) return windows;
   return windows.filter((window) => {
-    const bucket = window.id.match(/^(gemini|claude|gpt|3p)-/)?.[1];
-    if (bucket === undefined) return true;
-    if (family === "gemini") return bucket === "gemini";
-    return bucket === "3p" || bucket === "claude" || bucket === "gpt";
+    if (!/^(gemini|claude|gpt|3p)-/.test(window.id)) return true;
+    return antigravityWindowLimitsModel(window, model);
   });
 }
 
@@ -174,23 +172,85 @@ export interface PoolSelectionResult {
   readonly quickestResetMember: ServerProvider | null;
 }
 
-function memberLimitScore(provider: ServerProvider, model: string | undefined) {
+// One 5-hour Antigravity window consumes ~25% of a weekly allowance, so runway and pace share a 4:1 scale.
+const SESSION_TO_WEEKLY_RATIO = 0.25;
+const COMFORTABLE_RUNWAY_PERCENT = 20;
+
+interface EffectiveWindowScore {
+  readonly kind: ServerProviderUsageWindow["kind"];
+  readonly usedPercent: number;
+  readonly runway: number;
+  readonly pace: number;
+}
+
+function scoreMatchingWindow(window: ServerProviderUsageWindow, now: number): EffectiveWindowScore {
+  const resetMs = parseResetMs(window.resetsAt);
+  const expired = resetMs !== null && resetMs <= now;
+  const usedPercent = expired ? 0 : Math.max(0, Math.min(100, window.usedPercent));
+  const remaining = 100 - usedPercent;
+  const elapsed = expired ? 0 : (elapsedShare(window, now) ?? 0);
+  return {
+    kind: window.kind,
+    usedPercent,
+    runway: window.kind === "weekly" ? remaining / SESSION_TO_WEEKLY_RATIO : remaining,
+    pace: usedPercent - elapsed * 100,
+  };
+}
+
+function worstWindowByKind(
+  windows: ReadonlyArray<EffectiveWindowScore>,
+  kind: ServerProviderUsageWindow["kind"],
+): EffectiveWindowScore | undefined {
+  let worst: EffectiveWindowScore | undefined;
+  for (const entry of windows) {
+    if (entry.kind !== kind) continue;
+    if (
+      worst === undefined ||
+      entry.usedPercent > worst.usedPercent ||
+      (entry.usedPercent === worst.usedPercent && entry.pace > worst.pace)
+    ) {
+      worst = entry;
+    }
+  }
+  return worst;
+}
+
+function memberLimitScore(provider: ServerProvider, model: string | undefined, now: number) {
   const windows = matchingAntigravityWindows(provider, model);
   if (windows.length === 0) {
     return {
       hasLimits: false,
+      hasComfortableHeadroom: false,
+      runway: 50,
+      paceScore: 50,
       bottleneckUsed: 50,
       sessionUsed: 50,
       weeklyUsed: 50,
       totalUsed: 100,
     };
   }
-  const session = windows.find((w) => w.kind === "session");
-  const weekly = windows.find((w) => w.kind === "weekly");
-  const bottleneckUsed = windows.reduce((max, w) => Math.max(max, w.usedPercent), 0);
-  const totalUsed = windows.reduce((sum, w) => sum + w.usedPercent, 0);
+  const effective = windows.map((window) => scoreMatchingWindow(window, now));
+  const session = worstWindowByKind(effective, "session");
+  const weekly = worstWindowByKind(effective, "weekly");
+  const bottleneckUsed = effective.reduce((max, entry) => Math.max(max, entry.usedPercent), 0);
+  const totalUsed = effective.reduce((sum, entry) => sum + entry.usedPercent, 0);
+  const runway = effective.reduce(
+    (min, entry) => Math.min(min, entry.runway),
+    Number.POSITIVE_INFINITY,
+  );
+  const paceScore =
+    weekly !== undefined && session !== undefined
+      ? weekly.pace + SESSION_TO_WEEKLY_RATIO * session.pace
+      : weekly !== undefined
+        ? weekly.pace
+        : session !== undefined
+          ? session.pace
+          : effective.reduce((max, entry) => Math.max(max, entry.pace), Number.NEGATIVE_INFINITY);
   return {
     hasLimits: true,
+    hasComfortableHeadroom: runway >= COMFORTABLE_RUNWAY_PERCENT,
+    runway,
+    paceScore,
     bottleneckUsed,
     sessionUsed: session?.usedPercent ?? bottleneckUsed,
     weeklyUsed: weekly?.usedPercent ?? bottleneckUsed,
@@ -199,7 +259,8 @@ function memberLimitScore(provider: ServerProvider, model: string | undefined) {
 }
 
 /**
- * Picks the pool member with the least usage limits on it for `model`.
+ * Picks the best available pool member for `model`, preferring accounts with comfortable
+ * single-thread runway and the most headroom relative to their weekly and 5-hour reset clocks.
  * When all eligible members are depleted, reports `allDepleted: true` along with the
  * member whose quota renews the quickest (`earliestResetAt`).
  */
@@ -231,7 +292,7 @@ export function selectPoolMember(input: {
       now: input.now,
       cooldowns: input.cooldowns,
     }),
-    score: memberLimitScore(provider, input.model),
+    score: memberLimitScore(provider, input.model, input.now),
   }));
 
   const available = evaluated.filter((entry) => !entry.depletion.depleted);
@@ -244,7 +305,17 @@ export function selectPoolMember(input: {
       // Known non-depleted usage readings ahead of unknown-quota members.
       const limitsDiff = Number(b.score.hasLimits) - Number(a.score.hasLimits);
       if (limitsDiff !== 0) return limitsDiff;
-      // Least constrained bottleneck first (highest remaining headroom).
+      // Members with comfortable single-thread runway ahead of near-empty ones.
+      const headroomDiff =
+        Number(b.score.hasComfortableHeadroom) - Number(a.score.hasComfortableHeadroom);
+      if (headroomDiff !== 0) return headroomDiff;
+      if (a.score.hasComfortableHeadroom) {
+        if (a.score.paceScore !== b.score.paceScore) {
+          return a.score.paceScore - b.score.paceScore;
+        }
+      } else if (a.score.runway !== b.score.runway) {
+        return b.score.runway - a.score.runway;
+      }
       if (a.score.bottleneckUsed !== b.score.bottleneckUsed) {
         return a.score.bottleneckUsed - b.score.bottleneckUsed;
       }
