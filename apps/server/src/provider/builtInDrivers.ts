@@ -16,6 +16,7 @@ import type {
   ProviderUsageReaderEnv,
 } from "@t3tools/provider-core/server/driver";
 import { KiroDriver, type KiroDriverEnv } from "@t3tools/provider-kiro/server";
+import { PoolDriver, type PoolDriverEnv } from "../fork/PoolDriver.ts";
 
 export type BuiltInDriversEnv =
   | AcpRegistryDriverEnv
@@ -28,7 +29,8 @@ export type BuiltInDriversEnv =
   | KiroDriverEnv
   | OpenCodeDriverEnv
   | PiDriverEnv
-  | MuseDriverEnv;
+  | MuseDriverEnv
+  | PoolDriverEnv;
 
 export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv>> = [
   CodexDriver,
@@ -38,6 +40,7 @@ export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv
   FxDriver,
   OpenCodeDriver,
   AntigravityDriver,
+  PoolDriver,
   KiroDriver,
   PiDriver,
   MuseDriver,

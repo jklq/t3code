@@ -38,6 +38,7 @@ import { OpenAI } from "../Icons";
 import { Alert, AlertTitle } from "../ui/alert";
 import { Popover, PopoverCreateHandle, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { PaceIcon, ResetCreditDialog, barColor, usePaceMark, useResetCredit } from "./UsageLimits";
+import { CombinedPoolBar } from "../../fork/CombinedPoolBar";
 import {
   collectExternalUsageLinks,
   collectLimitNotices,
@@ -629,6 +630,7 @@ function PoolWindowCard({
         ) : null}
       </div>
       <PoolBar pool={pool} color={color} now={now} />
+      <CombinedPoolBar pool={pool} color={color} now={now} />
       {description ? (
         <p className="text-xs text-muted-foreground md:col-span-2">{description}</p>
       ) : null}

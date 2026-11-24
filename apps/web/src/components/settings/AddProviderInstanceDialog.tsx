@@ -65,6 +65,10 @@ import { AddManagedCodexAccountDialog } from "./CodexSetupSection";
 import { MultipleAccountsNote } from "./MultipleAccountsNote";
 import { ProviderEnvironmentSection } from "./ProviderInstanceCard";
 import { useSecretSources } from "./SecretSourceInput";
+import { useAtomValue } from "@effect/atom-react";
+import { providersIgnoringCheckedAtAtom } from "../../state/server";
+import { parsePoolConfig, POOL_DRIVER_KIND } from "@t3tools/shared/usageLimits";
+import { defaultPoolMemberIds, PoolMembersPicker } from "../../fork/PoolMembersSection";
 
 const INSTANCE_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
@@ -166,6 +170,7 @@ export function AddProviderInstanceDialog({
   const gt = useGT();
   const m = useMessages();
   const settings = useEnvironmentSettings(environmentId);
+  const serverProviders = useAtomValue(providersIgnoringCheckedAtAtom(environmentId));
   const secretSources = useSecretSources(environmentId);
   const persistProviderInstance = usePersistEnvironmentProviderInstanceMutation(environmentId);
   const canManageProviders = useEnvironmentScope(environmentId, AuthProvidersManageScope);
@@ -273,7 +278,17 @@ export function AddProviderInstanceDialog({
     });
   };
   const selectDriver = (value: string) => {
-    setDriver(ProviderDriverKind.make(value));
+    const nextDriver = ProviderDriverKind.make(value);
+    setDriver(nextDriver);
+    if (nextDriver === POOL_DRIVER_KIND && configByDriver[nextDriver] === undefined) {
+      setConfigByDriver((existing) => ({
+        ...existing,
+        [nextDriver]: {
+          memberDriver: "antigravity",
+          memberInstanceIds: defaultPoolMemberIds(settings.providerInstances, serverProviders),
+        },
+      }));
+    }
     setIsManualAcpConfiguration(false);
     setHasAttemptedSubmit(false);
   };
@@ -733,7 +748,22 @@ export function AddProviderInstanceDialog({
                 />
               </SettingsGroup>
 
-              {!isAcpRegistry && driverSettingsFields.length > 0 ? (
+              {driver === POOL_DRIVER_KIND ? (
+                <SettingsGroup variant="plain" className={cn(wizardStep !== 2 && "hidden")}>
+                  <PoolMembersPicker
+                    memberInstanceIds={parsePoolConfig(configDraft).memberInstanceIds}
+                    providerInstances={settings.providerInstances}
+                    serverProviders={serverProviders}
+                    onChange={(memberInstanceIds) =>
+                      setConfigDraft({
+                        ...configDraft,
+                        memberDriver: "antigravity",
+                        memberInstanceIds: [...memberInstanceIds],
+                      })
+                    }
+                  />
+                </SettingsGroup>
+              ) : !isAcpRegistry && driverSettingsFields.length > 0 ? (
                 <SettingsGroup variant="plain" className={cn(wizardStep !== 2 && "hidden")}>
                   <ProviderSettingsForm
                     definition={driverOption}

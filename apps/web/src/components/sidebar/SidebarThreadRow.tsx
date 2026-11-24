@@ -120,6 +120,7 @@ import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
 import { ThreadSearchMatchExcerpt } from "../ThreadSearchMatch";
 import { makeWorkspaceFileDropHandlers } from "../chat/workspaceFileDrop";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+import { resolveSidebarPoolMember, SidebarPoolProviderIcon } from "../../fork/PoolProviderIcon";
 import { getTriggerDisplayModelName } from "../chat/providerIconUtils";
 import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../providerInstances";
 import { useThreadRunningTerminalIds } from "../../state/terminalSessions";
@@ -217,18 +218,25 @@ function SidebarProviderStack(props: {
     currentEntry,
     props.providerEntryByInstanceId.values(),
   );
-  const current = (
-    <ProviderInstanceIcon
-      driverKind={currentEntry.driverKind}
-      displayName={currentEntry.displayName}
-      accentColor={currentEntry.accentColor}
-      acpRegistryAgentId={currentEntry.acpRegistryAgentId}
-      acpRegistryIconUrl={currentEntry.acpRegistryIconUrl}
-      showBadge={showInstanceBadge}
-      size="compact"
-      iconClassName="opacity-60"
-    />
-  );
+  const current =
+    currentEntry.driverKind === "pool" ? (
+      <SidebarPoolProviderIcon
+        activeProviderThreadId={props.thread.activeProviderThreadId}
+        poolEntry={currentEntry}
+        providerEntryByInstanceId={props.providerEntryByInstanceId}
+      />
+    ) : (
+      <ProviderInstanceIcon
+        driverKind={currentEntry.driverKind}
+        displayName={currentEntry.displayName}
+        accentColor={currentEntry.accentColor}
+        acpRegistryAgentId={currentEntry.acpRegistryAgentId}
+        acpRegistryIconUrl={currentEntry.acpRegistryIconUrl}
+        showBadge={showInstanceBadge}
+        size="compact"
+        iconClassName="opacity-60"
+      />
+    );
   if (stack.length === 1) {
     return <span className="inline-flex shrink-0 items-center">{current}</span>;
   }
@@ -342,23 +350,45 @@ function SidebarThreadTooltip({
         ) : null}
         {driverKind ? (
           <div className="flex min-w-0 items-center gap-2">
-            <ProviderInstanceIcon
-              driverKind={driverKind}
-              displayName={
-                providerEntry?.displayName ?? thread.runtime?.providerName ?? modelInstanceId
-              }
-              accentColor={providerEntry?.accentColor}
-              acpRegistryAgentId={providerEntry?.acpRegistryAgentId}
-              acpRegistryIconUrl={providerEntry?.acpRegistryIconUrl}
-              showBadge={showInstanceBadge && providerEntry?.accentColor !== undefined}
-              badgeContent="none"
-              badgeClassName="h-2 min-w-2 px-0"
-              iconClassName="size-3 shrink-0 opacity-60"
-            />
+            {driverKind === "pool" && providerEntry ? (
+              <SidebarPoolProviderIcon
+                activeProviderThreadId={thread.activeProviderThreadId}
+                poolEntry={providerEntry}
+                providerEntryByInstanceId={providerEntryByInstanceId}
+                badgeContent="none"
+                indicatorBackground="var(--popover)"
+                iconClassName="size-3 shrink-0 opacity-60"
+              />
+            ) : (
+              <ProviderInstanceIcon
+                driverKind={driverKind}
+                displayName={
+                  providerEntry?.displayName ?? thread.runtime?.providerName ?? modelInstanceId
+                }
+                accentColor={providerEntry?.accentColor}
+                acpRegistryAgentId={providerEntry?.acpRegistryAgentId}
+                acpRegistryIconUrl={providerEntry?.acpRegistryIconUrl}
+                showBadge={showInstanceBadge && providerEntry?.accentColor !== undefined}
+                badgeContent="none"
+                badgeClassName="h-2 min-w-2 px-0"
+                iconClassName="size-3 shrink-0 opacity-60"
+              />
+            )}
             <div className="min-w-0 truncate text-foreground/75">
-              {showInstanceBadge && providerEntry
-                ? `${modelLabel} · ${providerEntry.displayName}`
-                : modelLabel}
+              {driverKind === "pool" && providerEntry
+                ? (() => {
+                    const boundMember = resolveSidebarPoolMember({
+                      activeProviderThreadId: thread.activeProviderThreadId,
+                      poolInstanceId: providerEntry.instanceId,
+                      providerEntryByInstanceId,
+                    });
+                    return boundMember
+                      ? `${modelLabel} · ${providerEntry.displayName} (${boundMember.displayName})`
+                      : `${modelLabel} · ${providerEntry.displayName}`;
+                  })()
+                : showInstanceBadge && providerEntry
+                  ? `${modelLabel} · ${providerEntry.displayName}`
+                  : modelLabel}
             </div>
           </div>
         ) : null}

@@ -135,6 +135,8 @@ import * as ProviderInstallationGate from "./provider/ProviderInstallationGate.t
 import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
 import * as ProviderAdapterRegistry from "./orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
+import * as PoolCoordinator from "./fork/PoolCoordinator.ts";
+import * as PoolRuntimeRegistry from "./fork/PoolRuntimeRegistry.ts";
 import * as ProviderUsageLimitsIngestion from "./provider/ProviderUsageLimitsIngestion.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
@@ -771,7 +773,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       yield* (yield* OrchestrationMilestones.OrchestrationMilestones).start();
     }),
   ).pipe(Layer.provide(OrchestrationMilestones.layer), Layer.provide(ProjectionStoreV2.layer)),
-  ProviderUsageLimitsIngestion.layer,
+  Layer.merge(ProviderUsageLimitsIngestion.layer, PoolCoordinator.layerBridge),
   layerProviderInstallationRefresh,
   ProviderInstallation.layer,
   ReplayMarkers.layer,
@@ -800,7 +802,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ),
   // One gate for the server, below hydration so the Claude adapter sees it: layers memoize by
   // reference, so the runtime layer shares it.
-  Layer.provideMerge(ProviderInstallationGate.layer),
+  Layer.provideMerge(Layer.mergeAll(ProviderInstallationGate.layer, PoolRuntimeRegistry.layer)),
   // Provider hydration builds the Claude runner, which reports agents to the same scanner the
   // terminal and preview layers share.
   Layer.provideMerge(layerPortScanner),

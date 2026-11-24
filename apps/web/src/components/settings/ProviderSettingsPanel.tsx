@@ -101,6 +101,7 @@ import { useManagedPolicy } from "~/state/managedPolicy";
 import { ExpandableText } from "./ExpandableText";
 import { IntervalSecondsField } from "./IntervalSecondsField";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
+import { PoolMembersSection } from "../../fork/PoolMembersSection";
 import { useSecretSources } from "./SecretSourceInput";
 import { TextGeneratorsSettings } from "./TextGeneratorsSettings";
 import { UsageProviderSettings } from "./UsageProviderSettings";
@@ -997,6 +998,8 @@ export function EnvironmentProviderSettings({
         readOnly={readOnly}
         canWriteSettings={canWriteSettings}
         liveProvider={serverProviders.find((candidate) => candidate.instanceId === row.instanceId)}
+        serverProviders={serverProviders}
+        providerInstances={settings.providerInstances}
         isUpdateDispatching={updatingProviderInstanceIds.has(row.instanceId)}
         showProjectOverride={showProjectOverride}
         projectOverrideValue={
@@ -1300,6 +1303,8 @@ function ProviderInstanceRow({
   readOnly,
   canWriteSettings,
   liveProvider,
+  serverProviders,
+  providerInstances,
   isUpdateDispatching,
   showProjectOverride,
   projectOverrideValue,
@@ -1320,6 +1325,8 @@ function ProviderInstanceRow({
   readonly readOnly: boolean;
   readonly canWriteSettings: boolean;
   readonly liveProvider: ServerProvider | undefined;
+  readonly serverProviders: ReadonlyArray<ServerProvider>;
+  readonly providerInstances: UnifiedSettings["providerInstances"];
   readonly isUpdateDispatching: boolean;
   readonly showProjectOverride: boolean;
   readonly projectOverrideValue: boolean | undefined;
@@ -1396,7 +1403,15 @@ function ProviderInstanceRow({
       }
       canWriteSettings={canWriteSettings}
       setup={
-        mode === "editor" && driver === "antigravity" ? (
+        mode === "editor" && driver === "pool" ? (
+          <PoolMembersSection
+            instance={instance}
+            providerInstances={providerInstances}
+            serverProviders={serverProviders}
+            readOnly={readOnly}
+            onUpdate={(next) => actions.updateInstance(instanceId, instance, next)}
+          />
+        ) : mode === "editor" && driver === "antigravity" ? (
           <ProviderSetupSection
             environmentId={environmentId}
             environmentLabel={environmentLabel}
