@@ -72,6 +72,7 @@ describe("Antigravity process environment", () => {
       GEMINI_HOME: "/shared-gemini-home",
       gemini_home: "/alias-shared-home",
       AGY_ACP_FORCE_FILE_STORAGE: "0",
+      AGY_CLI_FORCE_FILE_TOKEN_STORAGE: "0",
       agy_cli_disable_auto_update: "0",
       BROWSER: "open-real-browser",
       browser: "another-real-browser",
@@ -99,6 +100,7 @@ describe("Antigravity process environment", () => {
         HOME: "/home/developer",
         PATH: "/usr/bin",
         CUSTOM_SETTING: "keep-this",
+        AGY_CLI_FORCE_FILE_TOKEN_STORAGE: "1",
         SSH_CONNECTION: "127.0.0.1 0 127.0.0.1 0",
         GEMINI_HOME: profile.geminiHome,
         AGY_ACP_FORCE_FILE_STORAGE: "1",
@@ -151,11 +153,18 @@ describe("Antigravity process environment", () => {
     expect(business.GOOGLE_API_KEY).toBeUndefined();
 
     // Only the Google account method has the `--login` sign-in that works without the keyring.
-    for (const env of [geminiKey, vertexKey, business]) expect(env.SSH_CONNECTION).toBeUndefined();
-    expect(
-      spawnFor({ authMethod: "oauth-personal", apiKey: "", gcpProject: "", gcpLocation: "" })
-        .SSH_CONNECTION,
-    ).toBe("127.0.0.1 0 127.0.0.1 0");
+    for (const env of [geminiKey, vertexKey, business]) {
+      expect(env.SSH_CONNECTION).toBeUndefined();
+      expect(env.AGY_CLI_FORCE_FILE_TOKEN_STORAGE).toBeUndefined();
+    }
+    const personal = spawnFor({
+      authMethod: "oauth-personal",
+      apiKey: "",
+      gcpProject: "",
+      gcpLocation: "",
+    });
+    expect(personal.SSH_CONNECTION).toBe("127.0.0.1 0 127.0.0.1 0");
+    expect(personal.AGY_CLI_FORCE_FILE_TOKEN_STORAGE).toBe("1");
   });
 
   it("isolates TEMP and TMP to the profile directory on Windows", () => {
