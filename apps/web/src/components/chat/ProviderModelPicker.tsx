@@ -26,6 +26,7 @@ import { ModelPickerContent, resolveModelPickerSelectedModel } from "./ModelPick
 import { retainedModelWhileProviderLocked } from "./ProviderModelPicker.logic";
 import { ChatGptSharingControl } from "./ChatGptSharingControl";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
+import { PoolProviderIcon, type ActivePoolMemberPresentation } from "../../fork/PoolProviderIcon";
 import { ModelEsque, getDisplayModelName, getTriggerDisplayModelName } from "./providerIconUtils";
 import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../providerInstances";
 import { ComposerControl, type ComposerControlSize } from "./ComposerControl";
@@ -128,6 +129,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
    */
   effortColumn?: ReactNode;
   footer?: ReactNode;
+  activePoolMember?: ActivePoolMemberPresentation | null;
 }) {
   const composerFloatingLayerProps = useComposerMenuProps();
   const [uncontrolledIsMenuOpen, setUncontrolledIsMenuOpen] = useState(false);
@@ -274,6 +276,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     : undefined;
   const triggerTooltipContent = [
     props.triggerLabel ?? allModelNames ?? triggerLabel,
+    props.activePoolMember
+      ? `${activeEntry?.displayName ?? "Pool"} · ${props.activePoolMember.displayName}`
+      : null,
     props.triggerDetail,
     shortcutLabel,
   ]
@@ -415,21 +420,33 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           ) : activeEntry && props.triggerLabel === undefined ? (
             // Narrow compacted composers hide the provider icon before truncating the name.
             <span data-chat-provider-model-picker-icon className="contents">
-              <ProviderInstanceIcon
-                driverKind={activeEntry.driverKind}
-                displayName={activeEntry.displayName}
-                accentColor={activeEntry.accentColor}
-                acpRegistryAgentId={activeEntry.acpRegistryAgentId}
-                acpRegistryIconUrl={activeEntry.acpRegistryIconUrl}
-                showBadge={showInstanceBadge}
-                className="size-4"
-                iconClassName={cn("size-4", props.activeProviderIconClassName)}
-                indicatorBackground={props.instanceIndicatorBackground ?? "var(--contrast-input)"}
-                badgeClassName={cn(
-                  "right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-5xs",
-                  size === "xs" && "shadow-none",
-                )}
-              />
+              {activeEntry.driverKind === "pool" ? (
+                <PoolProviderIcon
+                  poolDisplayName={activeEntry.displayName}
+                  poolAccentColor={activeEntry.accentColor}
+                  activeMember={props.activePoolMember ?? null}
+                  className="size-4"
+                  iconClassName={cn("size-4", props.activeProviderIconClassName)}
+                  indicatorBackground={props.instanceIndicatorBackground ?? "var(--contrast-input)"}
+                  {...(size === "xs" ? { badgeClassName: "shadow-none" } : {})}
+                />
+              ) : (
+                <ProviderInstanceIcon
+                  driverKind={activeEntry.driverKind}
+                  displayName={activeEntry.displayName}
+                  accentColor={activeEntry.accentColor}
+                  acpRegistryAgentId={activeEntry.acpRegistryAgentId}
+                  acpRegistryIconUrl={activeEntry.acpRegistryIconUrl}
+                  showBadge={showInstanceBadge}
+                  className="size-4"
+                  iconClassName={cn("size-4", props.activeProviderIconClassName)}
+                  indicatorBackground={props.instanceIndicatorBackground ?? "var(--contrast-input)"}
+                  badgeClassName={cn(
+                    "right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-5xs",
+                    size === "xs" && "shadow-none",
+                  )}
+                />
+              )}
             </span>
           ) : null}
           {props.isComposerOwned ? (

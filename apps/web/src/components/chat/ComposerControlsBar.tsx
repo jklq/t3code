@@ -15,10 +15,12 @@ import {
   type EnvironmentId,
   type ModelSelection,
   type ProviderDriverKind,
+  type ProviderInstanceConfigMap,
   type ProviderInstanceId,
   type RuntimeMode,
   type ServerProvider,
 } from "@t3tools/contracts";
+import { useActivePoolMember } from "../../fork/PoolProviderIcon";
 import type { EffortDisplay } from "@t3tools/contracts/settings";
 import { cn } from "~/lib/utils";
 import { resolveComposerTraitsInput } from "./composerProviderState";
@@ -80,6 +82,7 @@ export function ComposerControlsBar(props: {
   lockedProvider: ChatComposerProps["lockedProvider"];
   lockedContinuationGroupKey: string | null;
   providerInstanceEntries: ReadonlyArray<ProviderInstanceEntry>;
+  providerInstances?: ProviderInstanceConfigMap | undefined;
   keybindings: ChatComposerProps["keybindings"];
   modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<AppModelOption>>;
   terminalOpen: boolean;
@@ -165,6 +168,19 @@ export function ComposerControlsBar(props: {
     onPromptEdit,
   });
   const effort = describeComposerEffort(traitsInput, props.effortDisplay, controlSize, m);
+  const activePoolEntry =
+    selectedProvider === "pool"
+      ? providerInstanceEntries.find((entry) => entry.instanceId === selectedInstanceId)
+      : undefined;
+  const activePoolMember = useActivePoolMember({
+    routeKind,
+    routeThreadRef,
+    poolEntry: activePoolEntry,
+    selectedModel,
+    reportedModelSelection,
+    providerInstances: props.providerInstances,
+    providerInstanceEntries,
+  });
   const restingBlockDefs = showModeBlock
     ? [
         {
@@ -246,6 +262,7 @@ export function ComposerControlsBar(props: {
       onOpenChange={onModelPickerOpenChange}
       getModelDisabledReason={getModelDisabledReason}
       onOpenProviderSetup={onOpenProviderSetup}
+      activePoolMember={activePoolMember}
     />
   );
   return showProviderUnavailable ? (

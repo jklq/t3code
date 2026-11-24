@@ -42,6 +42,7 @@ import { ThreadFind, ThreadFindCanvas } from "./chat/ThreadFindProvider";
 import { closeThreadFind, openThreadFind, useThreadFindOpen } from "./chat/threadFindStore";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import { useUsageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
+import { ChatPoolUsageBar } from "../fork/CombinedPoolBar";
 import {
   isThreadEnvironmentLocked,
   resolveDraftHeroState,
@@ -3814,7 +3815,9 @@ export default function ChatView(props: ChatViewProps) {
                   >
                     <ChildThreadApprovals threadRef={activeThreadRef} />
                     <div className="relative">
-                      <ComposerSurface.Shell contextRow={showComposerContextStrip}>
+                      <ComposerSurface.Shell
+                        contextRow={showComposerContextStrip || selectedProvider === "pool"}
+                      >
                         <ComposerSurface.Host
                           inert={queuedRunEdit.isSaving}
                           aria-busy={queuedRunEdit.isSaving}
@@ -4075,6 +4078,15 @@ export default function ChatView(props: ChatViewProps) {
                                 />
                               </div>
                             )}
+                            {selectedProvider === "pool" ? (
+                              <ChatPoolUsageBar
+                                environmentId={environmentId}
+                                poolInstanceId={activeProviderInstanceId}
+                                selectedModel={activeUsageModel ?? undefined}
+                                providerInstances={settings.providerInstances}
+                                providerStatuses={providerStatuses as ServerProvider[]}
+                              />
+                            ) : null}
                           </div>
                         </div>
                       </ComposerSurface.Shell>

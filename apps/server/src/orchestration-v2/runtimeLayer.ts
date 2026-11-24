@@ -1,4 +1,5 @@
 import * as WorktreeBranchSync from "./WorktreeBranchSync.ts";
+import * as PoolCoordinator from "../fork/PoolCoordinator.ts";
 import * as GuestShareService from "../guest/GuestShareService.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
@@ -453,6 +454,16 @@ export const layerProduction = Layer.mergeAll(
         ProjectionStore.layer,
         layerThreadManagementProvided,
         layerOrchestratorProvided,
+        PoolCoordinator.layerLimitRecovery.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              ProjectionStore.layer,
+              layerOrchestratorProvided,
+              layerThreadLaunchProvided,
+              IdAllocator.layer,
+            ),
+          ),
+        ),
       ),
     ),
   ),
