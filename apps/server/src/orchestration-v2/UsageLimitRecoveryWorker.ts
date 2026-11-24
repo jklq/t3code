@@ -2,8 +2,10 @@ import { CommandId, MessageId, type OrchestrationV2Command } from "@t3tools/cont
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import type { OrchestrationV2DomainEvent } from "@t3tools/contracts";
+import { PoolLimitRecovery } from "../fork/PoolCoordinator.ts";
 import * as DueHint from "../scheduling/DueHint.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import { forkParked } from "../serverActivation.ts";
@@ -92,6 +94,7 @@ const makeSweep = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const settings = yield* ServerSettings.ServerSettingsService;
+  const poolLimitRecovery = yield* Effect.serviceOption(PoolLimitRecovery);
   const due = DueHint.make();
   yield* forkParked(
     Stream.runForEach(orchestrator.streamDomainEvents, (event) =>
@@ -128,7 +131,19 @@ const makeSweep = Effect.gen(function* () {
             limitRecovery: command.limitRecovery,
           });
         } else {
-          yield* threads.dispatch(command);
+          const handledByPool =
+            Option.isSome(poolLimitRecovery) &&
+            thread.latestRunId !== null &&
+            typeof thread.usageLimitResetAt === "string"
+              ? yield* poolLimitRecovery.value.tryRecoverPoolThread({
+                  threadId: thread.id,
+                  runId: thread.latestRunId,
+                  resetAt: thread.usageLimitResetAt,
+                })
+              : false;
+          if (!handledByPool) {
+            yield* threads.dispatch(command);
+          }
         }
       }).pipe(
         Effect.catchCause((cause) =>
